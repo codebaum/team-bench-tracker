@@ -1,0 +1,8 @@
+{
+  "name": "Team Bench Tracker",
+  "description": "A clean, simple progressive web app to track playing, bench, and unavailable status of players and bench counts during games.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
