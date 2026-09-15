@@ -35,6 +35,7 @@ export default function App() {
   const [newPlayerName, setNewPlayerName] = useState('');
   const [showNewGameModal, setShowNewGameModal] = useState(false);
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ player: Player; index: number } | null>(null);
+  const [draggedPlayerId, setDraggedPlayerId] = useState<string | null>(null);
 
   // Save to localStorage
   useEffect(() => {
@@ -54,7 +55,37 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [recentlyDeleted]);
 
-  // Move player up or down sections
+  // Desktop Drag and Drop Handlers
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    setDraggedPlayerId(id);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedPlayerId(null);
+  };
+
+  const handleDropPlayer = (targetStatus: PlayerStatus) => {
+    if (!draggedPlayerId) return;
+    setPlayers((prev) =>
+      prev.map((player) => {
+        if (player.id !== draggedPlayerId) return player;
+        if (player.status === targetStatus) return player;
+
+        const shouldIncrementBench = targetStatus === 'bench' && player.status !== 'bench';
+
+        return {
+          ...player,
+          status: targetStatus,
+          benchCount: shouldIncrementBench ? player.benchCount + 1 : player.benchCount,
+        };
+      })
+    );
+    setDraggedPlayerId(null);
+  };
+
+  // Move player up or down sections (for mobile swipe actions)
   const handleMovePlayer = (id: string, direction: 'up' | 'down') => {
     setPlayers((prev) =>
       prev.map((player) => {
@@ -182,7 +213,10 @@ export default function App() {
                 Team Bench Tracker
               </h1>
               <p className="text-[11px] text-slate-500 hidden sm:block">
-                Use arrows to rotate • Swipe left to delete
+                Drag and drop to rotate • Swipe left on mobile
+              </p>
+              <p className="text-[11px] text-slate-500 block sm:hidden">
+                Swipe left to move or delete
               </p>
             </div>
           </div>
@@ -254,7 +288,10 @@ export default function App() {
             players={playingPlayers}
             onRemovePlayer={handleRemovePlayer}
             onMovePlayer={handleMovePlayer}
-            onAdjustBenchCount={handleAdjustBenchCount}
+            onDropPlayer={handleDropPlayer}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            draggedPlayerId={draggedPlayerId}
             emptyMessage="No players currently playing"
           />
 
@@ -267,7 +304,10 @@ export default function App() {
             players={benchPlayers}
             onRemovePlayer={handleRemovePlayer}
             onMovePlayer={handleMovePlayer}
-            onAdjustBenchCount={handleAdjustBenchCount}
+            onDropPlayer={handleDropPlayer}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            draggedPlayerId={draggedPlayerId}
             emptyMessage="No players on the bench"
           />
 
@@ -280,7 +320,10 @@ export default function App() {
             players={unavailablePlayers}
             onRemovePlayer={handleRemovePlayer}
             onMovePlayer={handleMovePlayer}
-            onAdjustBenchCount={handleAdjustBenchCount}
+            onDropPlayer={handleDropPlayer}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            draggedPlayerId={draggedPlayerId}
             emptyMessage="No unavailable players"
           />
         </div>

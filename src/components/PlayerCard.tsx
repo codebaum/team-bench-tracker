@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-react';
 import { Player } from '../types';
 
@@ -6,19 +6,29 @@ interface PlayerCardProps {
   player: Player;
   onRemovePlayer: (id: string) => void;
   onMovePlayer: (id: string, direction: 'up' | 'down') => void;
-  onAdjustBenchCount?: (id: string, delta: number) => void;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
+  isBeingDragged?: boolean;
 }
+
+const BUTTON_WIDTH = 72; // px per action button
 
 export const PlayerCard: React.FC<PlayerCardProps> = ({
   player,
   onRemovePlayer,
   onMovePlayer,
-  onAdjustBenchCount,
+  onDragStart,
+  onDragEnd,
+  isBeingDragged,
 }) => {
   const isUnavailable = player.status === 'unavailable';
   const isPlaying = player.status === 'playing';
+  const isBench = player.status === 'bench';
 
-  // Swipe-to-delete states (iOS style: Swipe Left)
+  // Number of options: 3 for Bench (Play, Remove, Delete), 2 for Playing (Bench, Delete) and Unavailable (Bench, Delete)
+  const revealWidth = isBench ? BUTTON_WIDTH * 3 : BUTTON_WIDTH * 2;
+
+  // Mobile Touch Swipe-to-action states (Swipe Left reveals the options; NO swipe-to-delete)
   const [offsetX, setOffsetX] = useState(0);
   const [isSwiping, setIsSwiping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -43,15 +53,15 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
     displayName = displayName.replace(/\s+#?\d+$/, '').trim();
   }
 
+  // Delete is only triggered by explicitly tapping the Delete button
   const triggerDelete = () => {
     setIsDeleting(true);
-    setOffsetX(350); // slide all the way left
     setTimeout(() => {
       onRemovePlayer(player.id);
     }, 200);
   };
 
-  // --- Touch Swipe Handlers (iOS Native Swipe Left) ---
+  // --- Mobile Touch Swipe Handlers ---
   const handleTouchStart = (e: React.TouchEvent) => {
     startXRef.current = e.touches[0].clientX;
     startYRef.current = e.touches[0].clientY;
@@ -77,13 +87,16 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
     if (isHorizontalSwipeRef.current === false) return;
 
     // Swiping left means deltaX > 0 (finger moves to left)
-    const newOffset = currentOffsetRef.current + deltaX;
+    const rawOffset = currentOffsetRef.current + deltaX;
 
-    // Apply resistance if trying to swipe right beyond 0
-    if (newOffset < 0) {
-      setOffsetX(newOffset * 0.2);
+    if (rawOffset < 0) {
+      // Small resistance when pulling right
+      setOffsetX(rawOffset * 0.2);
+    } else if (rawOffset > revealWidth) {
+      // Elastic resistance past reveal width so it never deletes automatically
+      setOffsetX(revealWidth + (rawOffset - revealWidth) * 0.15);
     } else {
-      setOffsetX(newOffset);
+      setOffsetX(rawOffset);
     }
   };
 
@@ -91,67 +104,13 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
     setIsSwiping(false);
     isHorizontalSwipeRef.current = null;
 
-    const cardWidth = cardRef.current?.offsetWidth || 300;
-
-    // iOS Full swipe to delete threshold: > 45% of card width or > 150px
-    if (offsetX > Math.min(150, cardWidth * 0.45)) {
-      triggerDelete();
-    } else if (offsetX > 60) {
-      // Snap open to reveal Delete button (80px)
-      setOffsetX(80);
+    // Snap to reveal options or snap back closed (NO swipe to delete)
+    if (offsetX > 35) {
+      setOffsetX(revealWidth);
     } else {
-      // Snap back closed
       setOffsetX(0);
     }
   };
-
-  // --- Mouse Swipe Support (for desktop testing) ---
-  const mouseStartXRef = useRef<number | null>(null);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Only handle primary mouse button
-    if (e.button !== 0) return;
-    mouseStartXRef.current = e.clientX;
-    currentOffsetRef.current = offsetX;
-    setIsSwiping(true);
-  };
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (mouseStartXRef.current === null) return;
-      const deltaX = mouseStartXRef.current - e.clientX;
-      const newOffset = currentOffsetRef.current + deltaX;
-      if (newOffset < 0) {
-        setOffsetX(newOffset * 0.2);
-      } else {
-        setOffsetX(newOffset);
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (mouseStartXRef.current === null) return;
-      mouseStartXRef.current = null;
-      setIsSwiping(false);
-
-      if (offsetX > 140) {
-        triggerDelete();
-      } else if (offsetX > 55) {
-        setOffsetX(80);
-      } else {
-        setOffsetX(0);
-      }
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [offsetX]);
-
-  const isUpDisabled = isPlaying;
-  const isDownDisabled = isUnavailable;
 
   return (
     <div
@@ -161,40 +120,143 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
         isDeleting ? 'max-h-0 opacity-0 my-0 py-0 overflow-hidden' : 'max-h-24 opacity-100'
       }`}
     >
-      {/* iOS Red Delete Background (Revealed when swiping left) */}
+      {/* Revealed Action Bar behind Mobile Swipe: Up-to-three options */}
       <div
-        className="absolute inset-y-0 right-0 flex items-center justify-end bg-rose-600 text-white font-medium text-xs rounded-xl overflow-hidden cursor-pointer"
-        style={{ width: `${Math.max(offsetX, offsetX > 0 ? 80 : 0)}px` }}
-        onClick={triggerDelete}
-        title="Tap to delete player"
+        className="absolute inset-y-0 right-0 flex items-stretch rounded-xl overflow-hidden z-0"
+        style={{ width: `${Math.max(offsetX, 0)}px` }}
       >
-        <button
-          type="button"
-          className="flex flex-col sm:flex-row items-center justify-center gap-1 w-20 h-full text-white font-semibold text-xs active:bg-rose-700 transition-colors"
+        <div
+          className="flex items-stretch ml-auto h-full"
+          style={{ width: `${revealWidth}px` }}
         >
-          <Trash2 className="w-4 h-4" />
-          <span>Delete</span>
-        </button>
+          {/* OPTION 1: PLAY (Only for ON THE BENCH - Up to Playing -> Green) */}
+          {isBench && (
+            <button
+              type="button"
+              id={`action-play-${player.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMovePlayer(player.id, 'up');
+                setOffsetX(0);
+              }}
+              className="w-[72px] flex flex-col items-center justify-center gap-0.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white transition-colors cursor-pointer"
+              title="Move to Playing"
+              aria-label="Move player to Playing"
+            >
+              <ChevronUp className="w-5 h-5" strokeWidth={2.5} />
+              <span className="text-[11px] font-bold tracking-tight leading-none">
+                Play
+              </span>
+            </button>
+          )}
+
+          {/* OPTION 2: BENCH (Down from PLAYING -> Yellow, or Up from UNAVAILABLE -> Yellow) */}
+          {isPlaying && (
+            <button
+              type="button"
+              id={`action-bench-${player.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMovePlayer(player.id, 'down');
+                setOffsetX(0);
+              }}
+              className="w-[72px] flex flex-col items-center justify-center gap-0.5 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-slate-950 font-bold transition-colors cursor-pointer"
+              title="Move to On The Bench"
+              aria-label="Move player to Bench"
+            >
+              <ChevronDown className="w-5 h-5" strokeWidth={2.5} />
+              <span className="text-[11px] font-bold tracking-tight leading-none">
+                Bench
+              </span>
+            </button>
+          )}
+
+          {isUnavailable && (
+            <button
+              type="button"
+              id={`action-bench-${player.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMovePlayer(player.id, 'up');
+                setOffsetX(0);
+              }}
+              className="w-[72px] flex flex-col items-center justify-center gap-0.5 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-slate-950 font-bold transition-colors cursor-pointer"
+              title="Move to On The Bench"
+              aria-label="Move player to Bench"
+            >
+              <ChevronUp className="w-5 h-5" strokeWidth={2.5} />
+              <span className="text-[11px] font-bold tracking-tight leading-none">
+                Bench
+              </span>
+            </button>
+          )}
+
+          {/* OPTION 3: REMOVE (Only for ON THE BENCH - Down to Unavailable -> Gray) */}
+          {isBench && (
+            <button
+              type="button"
+              id={`action-remove-${player.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMovePlayer(player.id, 'down');
+                setOffsetX(0);
+              }}
+              className="w-[72px] flex flex-col items-center justify-center gap-0.5 bg-slate-500 hover:bg-slate-400 active:bg-slate-600 text-white transition-colors cursor-pointer"
+              title="Move to Unavailable"
+              aria-label="Move player to Unavailable"
+            >
+              <ChevronDown className="w-5 h-5" strokeWidth={2.5} />
+              <span className="text-[11px] font-bold tracking-tight leading-none">
+                Remove
+              </span>
+            </button>
+          )}
+
+          {/* OPTION: DELETE (Always available on swipe - Red) */}
+          <button
+            type="button"
+            id={`action-delete-${player.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerDelete();
+            }}
+            className="w-[72px] flex flex-col items-center justify-center gap-0.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white transition-colors cursor-pointer"
+            title="Delete player"
+            aria-label="Delete player"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span className="text-[11px] font-bold tracking-tight leading-none">
+              Delete
+            </span>
+          </button>
+        </div>
       </div>
 
-      {/* Main Foreground Card */}
+      {/* Main Foreground Card (Draggable on Desktop) */}
       <div
         id={`player-card-${player.id}`}
+        draggable
+        onDragStart={(e) => onDragStart && onDragStart(e, player.id)}
+        onDragEnd={onDragEnd}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
-        onMouseDown={handleMouseDown}
+        onClick={() => {
+          if (offsetX > 0) setOffsetX(0);
+        }}
         style={{
           transform: `translateX(-${offsetX}px)`,
           transition: isSwiping ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)',
         }}
-        className={`relative flex items-center justify-between gap-2.5 sm:gap-3 p-3 sm:p-3.5 rounded-xl border ${
-          isUnavailable
-            ? 'bg-slate-50/90 border-slate-200 text-slate-400 opacity-70'
+        className={`relative z-10 flex items-center justify-between gap-3 p-3.5 sm:p-4 rounded-xl border transition-all cursor-grab active:cursor-grabbing ${
+          isBeingDragged
+            ? 'opacity-40 scale-98 border-dashed border-slate-400 bg-slate-100'
+            : isUnavailable
+            ? 'bg-slate-50/90 border-slate-200 text-slate-400 opacity-70 hover:border-slate-300'
             : isPlaying
-            ? 'bg-white border-slate-200/90 text-slate-800 shadow-xs'
-            : 'bg-white border-slate-200/90 text-slate-800 shadow-xs'
+            ? 'bg-white border-slate-200/90 text-slate-800 shadow-xs hover:border-emerald-300 hover:shadow-sm'
+            : 'bg-white border-slate-200/90 text-slate-800 shadow-xs hover:border-amber-300 hover:shadow-sm'
         }`}
       >
         {/* Left: Full Player Name with Number */}
@@ -220,99 +282,23 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
           )}
         </div>
 
-        {/* Right: Bench Count Badge & Up/Down Movement Arrows */}
-        <div
-          className="flex items-center gap-1.5 sm:gap-2 shrink-0"
-          onMouseDown={(e) => e.stopPropagation()} // don't trigger swipe drag when clicking controls
-        >
-          {/* Times Benched Number Badge */}
+        {/* Right: Number of Times Benched (All the way right, no container, bold, matches player name size) */}
+        <div className="shrink-0 text-right select-none pl-3">
           {isUnavailable ? (
             <span
-              className="font-mono text-base font-semibold text-slate-400 px-2 py-0.5 select-none"
+              className="font-bold text-sm sm:text-base leading-snug text-slate-400"
               title="Unavailable"
             >
               —
             </span>
           ) : (
-            <div className="flex items-center gap-1">
-              <span
-                className="inline-flex items-center justify-center min-w-7 h-7 px-2 text-xs sm:text-sm font-bold rounded-lg bg-slate-100 text-slate-700 border border-slate-200/80 shadow-2xs"
-                title={`Times on bench: ${player.benchCount}`}
-              >
-                {player.benchCount}
-              </span>
-
-              {/* Subtle +/- adjust on desktop hover */}
-              {onAdjustBenchCount && (
-                <div className="hidden sm:flex items-center gap-0.5 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAdjustBenchCount(player.id, -1);
-                    }}
-                    disabled={player.benchCount <= 0}
-                    className="w-4 h-5 flex items-center justify-center text-[11px] hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                    title="Decrement count"
-                  >
-                    -
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAdjustBenchCount(player.id, 1);
-                    }}
-                    className="w-4 h-5 flex items-center justify-center text-[11px] hover:text-slate-700 cursor-pointer"
-                    title="Increment count"
-                  >
-                    +
-                  </button>
-                </div>
-              )}
-            </div>
+            <span
+              className="font-bold text-sm sm:text-base leading-snug text-slate-900 tabular-nums"
+              title={`Times on bench: ${player.benchCount}`}
+            >
+              {player.benchCount}
+            </span>
           )}
-
-          {/* Up and Down Arrows (Directly to the right of number of times benched) */}
-          <div className="flex items-center gap-0.5 bg-slate-100/90 p-0.5 rounded-lg border border-slate-200/80">
-            <button
-              type="button"
-              id={`move-up-${player.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onMovePlayer(player.id, 'up');
-              }}
-              disabled={isUpDisabled}
-              className={`w-7 h-7 flex items-center justify-center rounded-md transition-all ${
-                isUpDisabled
-                  ? 'opacity-20 text-slate-400 cursor-not-allowed'
-                  : 'text-slate-700 hover:bg-white hover:text-slate-900 hover:shadow-xs active:bg-slate-200 cursor-pointer'
-              }`}
-              title={isUpDisabled ? 'Already at top (Playing)' : 'Move up a section'}
-              aria-label="Move player up"
-            >
-              <ChevronUp className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              id={`move-down-${player.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onMovePlayer(player.id, 'down');
-              }}
-              disabled={isDownDisabled}
-              className={`w-7 h-7 flex items-center justify-center rounded-md transition-all ${
-                isDownDisabled
-                  ? 'opacity-20 text-slate-400 cursor-not-allowed'
-                  : 'text-slate-700 hover:bg-white hover:text-slate-900 hover:shadow-xs active:bg-slate-200 cursor-pointer'
-              }`}
-              title={isDownDisabled ? 'Already at bottom (Unavailable)' : 'Move down a section'}
-              aria-label="Move player down"
-            >
-              <ChevronDown className="w-4 h-4" />
-            </button>
-          </div>
         </div>
       </div>
     </div>
